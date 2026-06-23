@@ -3,33 +3,19 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
-const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+
+// Increase JSON request limits to support in-memory Base64 file attachments
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configure Multer storage for uploaded resumes/attachments
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadPath = path.join(__dirname, 'uploads');
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-    cb(null, uploadPath);
-  },
-  filename: function (req, file, cb) {
-    // Generate unique name: timestamp + random + original name
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
-});
-const upload = multer({ storage: storage });
-
-// API to check for default PDF resume in root (backward compatibility)
+// API to check for default PDF resume in root (maintained for backward compatibility)
 app.get('/api/attachment-status', (req, res) => {
   const defaultResume = 'Ashish_Kumar_Kushavaha_Java_Backend.pdf';
   const filePath = path.join(__dirname, defaultResume);
@@ -45,20 +31,7 @@ app.get('/api/attachment-status', (req, res) => {
   return res.json({ exists: false });
 });
 
-// API to handle dynamic file uploads
-app.post('/api/upload-attachment', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
-  return res.json({
-    success: true,
-    filename: req.file.filename,
-    originalName: req.file.originalname,
-    size: req.file.size
-  });
-});
-
-// API to send a single email
+// API to send a single email with in-memory Base64 attachment
 app.post('/api/send-email', async (req, res) => {
   const { 
     smtpHost, 
@@ -68,8 +41,7 @@ app.post('/api/send-email', async (req, res) => {
     to, 
     subject, 
     body, 
-    attachmentFilename, 
-    attachmentOriginalName 
+    attachment 
   } = req.body;
 
   if (!smtpHost || !smtpPort || !smtpUser || !smtpPass || !to || !subject || !body) {
@@ -81,7 +53,7 @@ app.post('/api/send-email', async (req, res) => {
     const transporter = nodemailer.createTransport({
       host: smtpHost,
       port: parseInt(smtpPort),
-      secure: parseInt(smtpPort) === 465,
+      secure: parseInt(smtpPort) === 465, // true for 465, false for other ports
       auth: {
         user: smtpUser,
         pass: smtpPass
@@ -91,16 +63,14 @@ app.post('/api/send-email', async (req, res) => {
       }
     });
 
-    // Check and set dynamic attachment if uploaded
+    // Check and configure attachment from Base64 string if present
     let attachments = [];
-    if (attachmentFilename) {
-      const filePath = path.join(__dirname, 'uploads', attachmentFilename);
-      if (fs.existsSync(filePath)) {
-        attachments.push({
-          filename: attachmentOriginalName || attachmentFilename,
-          path: filePath
-        });
-      }
+    if (attachment && attachment.content) {
+      attachments.push({
+        filename: attachment.filename,
+        content: Buffer.from(attachment.content, 'base64'),
+        contentType: attachment.contentType
+      });
     }
 
     const mailOptions = {
@@ -119,7 +89,6 @@ app.post('/api/send-email', async (req, res) => {
   }
 });
 
-// Kill previous running process if any port binding conflict occurs, otherwise start server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

@@ -201,39 +201,33 @@ function loadConfig() {
 }
 
 // Upload selected file to Express server backend
-async function handleFileUpload(event) {
+// Process selected file locally and convert to Base64 (Serverless friendly)
+function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
     
-    // UI state: uploading...
-    elements.pdfFilename.textContent = 'Uploading attachment...';
+    // UI state: converting...
+    elements.pdfFilename.textContent = 'Processing file...';
     elements.pdfFilesize.textContent = 'Please wait';
     elements.btnAttachTrigger.disabled = true;
     elements.attachmentIcon.className = 'spin';
     elements.attachmentIcon.setAttribute('data-lucide', 'loader-2');
     lucide.createIcons();
     
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    try {
-        const response = await fetch('/api/upload-attachment', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok && data.success) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const base64Data = e.target.result.split(',')[1];
             state.attachment = {
-                filename: data.filename,
-                originalName: data.originalName,
-                size: data.size
+                filename: file.name,
+                content: base64Data,
+                contentType: file.type,
+                size: file.size
             };
             
             // UI state: Success Attached
-            elements.pdfFilename.textContent = data.originalName;
-            const kbSize = (data.size / 1024).toFixed(1);
+            elements.pdfFilename.textContent = file.name;
+            const kbSize = (file.size / 1024).toFixed(1);
             elements.pdfFilesize.textContent = `Attached (${kbSize} KB)`;
             elements.attachmentBadge.classList.add('success-attached');
             elements.attachmentIcon.className = '';
@@ -242,18 +236,25 @@ async function handleFileUpload(event) {
             elements.btnAttachTrigger.style.display = 'none';
             elements.btnRemoveAttachment.style.display = 'inline-flex';
             
-            showToast('Document uploaded successfully!', 'success');
-        } else {
-            throw new Error(data.error || 'Server rejected file upload.');
+            showToast('Document attached successfully!', 'success');
+        } catch (err) {
+            console.error('File conversion failed:', err);
+            showToast('Failed to process document format.', 'error');
+            resetAttachmentUI();
+        } finally {
+            elements.btnAttachTrigger.disabled = false;
+            lucide.createIcons();
         }
-    } catch (error) {
-        console.error('File upload failed:', error);
-        showToast(error.message || 'File upload failed.', 'error');
+    };
+    
+    reader.onerror = function() {
+        showToast('Error reading local file.', 'error');
         resetAttachmentUI();
-    } finally {
         elements.btnAttachTrigger.disabled = false;
         lucide.createIcons();
-    }
+    };
+    
+    reader.readAsDataURL(file);
 }
 
 // Remove current attachment
@@ -499,8 +500,11 @@ async function processNextEmail() {
             to: item.email,
             subject: state.email.subject,
             body: state.email.body,
-            attachmentFilename: state.attachment ? state.attachment.filename : null,
-            attachmentOriginalName: state.attachment ? state.attachment.originalName : null
+            attachment: state.attachment ? {
+                filename: state.attachment.filename,
+                content: state.attachment.content,
+                contentType: state.attachment.contentType
+            } : null
         };
         
         const response = await fetch('/api/send-email', {
