@@ -11,17 +11,21 @@ let state = {
         subject: '',
         body: ''
     },
-    attachment: null, // Stores { filename, originalName, size } once uploaded
-    recipients: [],
-    campaignStatus: 'idle', // 'idle', 'running', 'paused', 'done'
+    attachment: null,      // Stores { filename, content, contentType, size }
+    recipients: [],        // Raw parsed emails (from paste tab)
+    csvData: [],           // Parsed CSV email strings
+    activeTab: 'paste',    // 'paste' or 'csv'
+    campaignStatus: 'idle',// 'idle', 'running', 'paused', 'done'
     delaySeconds: 5,
-    queue: [],
+    queue: [],             // Campaign queue items: { email, status, error, timestamp }
     currentIndex: 0,
     metrics: {
         total: 0,
         sent: 0,
         failed: 0,
-        pending: 0
+        pending: 0,
+        rate: '100%',
+        eta: '--:--'
     },
     timerId: null
 };
@@ -38,6 +42,12 @@ const elements = {
     presetCustom: document.getElementById('preset-custom'),
     togglePassword: document.getElementById('toggle-password'),
     
+    // Gmail Safety Limit elements
+    safetyCount: document.getElementById('safety-count'),
+    safetyBarFill: document.getElementById('safety-bar-fill'),
+    safetyStatus: document.getElementById('safety-status'),
+    
+    // Resume Attachment elements
     pdfFilename: document.getElementById('pdf-filename'),
     pdfFilesize: document.getElementById('pdf-filesize'),
     attachmentBadge: document.getElementById('attachment-badge'),
@@ -46,23 +56,56 @@ const elements = {
     resumeInput: document.getElementById('resume-input'),
     attachmentIcon: document.getElementById('attachment-icon'),
     
+    // Editor elements
     emailSubject: document.getElementById('email-subject'),
     emailBody: document.getElementById('email-body'),
     
+    // Final Preview Modal elements
+    previewModal: document.getElementById('preview-modal'),
+    btnCloseModal: document.getElementById('btn-close-modal'),
+    btnModalCancel: document.getElementById('btn-modal-cancel'),
+    btnModalConfirm: document.getElementById('btn-modal-confirm'),
+    modalPreviewSubject: document.getElementById('modal-preview-subject'),
+    modalPreviewAttachment: document.getElementById('modal-preview-attachment'),
+    modalPreviewCount: document.getElementById('modal-preview-count'),
+    modalPreviewRecipients: document.getElementById('modal-preview-recipients'),
+    modalPreviewContent: document.getElementById('modal-preview-content'),
+    
+    // Recipients tabs
+    tabPaste: document.getElementById('tab-paste'),
+    tabCsv: document.getElementById('tab-csv'),
+    contentPaste: document.getElementById('content-paste'),
+    contentCsv: document.getElementById('content-csv'),
+    
+    // Recipients inputs
     recipientsList: document.getElementById('recipients-list'),
     parsedCount: document.getElementById('parsed-count'),
     sendDelay: document.getElementById('send-delay'),
     delayValue: document.getElementById('delay-value'),
     
+    // CSV dropzone elements
+    csvDropzone: document.getElementById('csv-dropzone'),
+    csvInput: document.getElementById('csv-input'),
+    btnCsvTrigger: document.getElementById('btn-csv-trigger'),
+    csvLoadedBadge: document.getElementById('csv-loaded-badge'),
+    csvFilename: document.getElementById('csv-filename'),
+    csvRowcount: document.getElementById('csv-rowcount'),
+    btnClearCsv: document.getElementById('btn-clear-csv'),
+    
+    // Campaign Control Buttons
     btnStart: document.getElementById('btn-start'),
+    btnPreview: document.getElementById('btn-preview'),
     btnPause: document.getElementById('btn-pause'),
     btnReset: document.getElementById('btn-reset'),
     
+    // Campaign Metrics UI
     campaignStatusBadge: document.getElementById('campaign-status-badge'),
     metricTotal: document.getElementById('metric-total'),
     metricSent: document.getElementById('metric-sent'),
     metricFailed: document.getElementById('metric-failed'),
+    metricRate: document.getElementById('metric-rate'),
     metricPending: document.getElementById('metric-pending'),
+    metricEta: document.getElementById('metric-eta'),
     progressBarFill: document.getElementById('progress-bar-fill'),
     progressPercentage: document.getElementById('progress-percentage'),
     
@@ -75,17 +118,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. Initialize Icons
     lucide.createIcons();
     
-    // 2. Load Email Template defaults (Empty by default now)
-    elements.emailSubject.value = '';
-    elements.emailBody.value = '';
-    
-    // 3. Load Saved SMTP Configuration
+    // 2. Load Saved SMTP Configuration
     loadConfig();
     
-    // 4. Setup Event Listeners
+    // 3. Setup Event Listeners
     setupEventListeners();
     
-    // 5. Perform initial email parse
+    // 4. Perform initial email parse
     parseRecipients();
 });
 
@@ -120,25 +159,83 @@ function setupEventListeners() {
     // Config Saving
     elements.btnSaveConfig.addEventListener('click', saveConfig);
     
-    // File Upload Handlers
+    // Advanced Settings Toggle
+    document.getElementById('btn-toggle-advanced').addEventListener('click', () => {
+        document.getElementById('advanced-settings-wrapper').classList.toggle('expanded');
+    });
+    
+    // File Upload Handlers (Resume)
     elements.btnAttachTrigger.addEventListener('click', () => elements.resumeInput.click());
     elements.resumeInput.addEventListener('change', handleFileUpload);
     elements.btnRemoveAttachment.addEventListener('click', removeAttachment);
     
-    // Recipients Change
+    // Tabs toggle handlers
+    elements.tabPaste.addEventListener('click', () => switchTab('paste'));
+    elements.tabCsv.addEventListener('click', () => switchTab('csv'));
+    
+    // Recipients Raw Change
     elements.recipientsList.addEventListener('input', parseRecipients);
+    
+    // CSV file upload zone events
+    elements.btnCsvTrigger.addEventListener('click', () => elements.csvInput.click());
+    elements.csvInput.addEventListener('change', (e) => handleCSVUpload(e.target.files[0]));
+    elements.btnClearCsv.addEventListener('click', clearCSV);
+    
+    // CSV Drag & Drop handlers
+    elements.csvDropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        elements.csvDropzone.classList.add('dragover');
+    });
+    elements.csvDropzone.addEventListener('dragleave', () => {
+        elements.csvDropzone.classList.remove('dragover');
+    });
+    elements.csvDropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        elements.csvDropzone.classList.remove('dragover');
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleCSVUpload(e.dataTransfer.files[0]);
+        }
+    });
     
     // Delay Slider
     elements.sendDelay.addEventListener('input', (e) => {
         state.delaySeconds = parseInt(e.target.value);
         elements.delayValue.textContent = `${state.delaySeconds}s`;
+        updateETA();
     });
     
+    // Modal Overlay Cancel / Confirm
+    elements.btnCloseModal.addEventListener('click', hidePreviewModal);
+    elements.btnModalCancel.addEventListener('click', hidePreviewModal);
+    elements.btnModalConfirm.addEventListener('click', confirmStartCampaign);
+    
     // Campaign Control Buttons
-    elements.btnStart.addEventListener('click', startCampaign);
+    elements.btnStart.addEventListener('click', handleSendTrigger);
+    elements.btnPreview.addEventListener('click', handlePreviewTrigger);
     elements.btnPause.addEventListener('click', pauseCampaign);
     elements.btnReset.addEventListener('click', resetCampaign);
     elements.btnClearLogs.addEventListener('click', clearLogs);
+}
+
+// Switch between paste list and CSV upload methods
+function switchTab(tabType) {
+    if (state.campaignStatus === 'running' || state.campaignStatus === 'paused') return;
+    
+    state.activeTab = tabType;
+    
+    if (tabType === 'paste') {
+        elements.tabPaste.classList.add('active');
+        elements.tabCsv.classList.remove('active');
+        elements.contentPaste.classList.remove('hidden');
+        elements.contentCsv.classList.add('hidden');
+        parseRecipients();
+    } else {
+        elements.tabCsv.classList.add('active');
+        elements.tabPaste.classList.remove('active');
+        elements.contentCsv.classList.remove('hidden');
+        elements.contentPaste.classList.add('hidden');
+        updateCSVCountUI();
+    }
 }
 
 // SMTP presets handler
@@ -152,12 +249,18 @@ function applyPreset(presetType) {
         elements.smtpHost.disabled = true;
         elements.smtpPort.disabled = true;
         elements.smtpSecure.disabled = true;
+        
+        // Collapse advanced panel since Gmail settings are automatic
+        document.getElementById('advanced-settings-wrapper').classList.remove('expanded');
     } else {
         elements.presetCustom.classList.add('active');
         elements.presetGmail.classList.remove('active');
         elements.smtpHost.disabled = false;
         elements.smtpPort.disabled = false;
         elements.smtpSecure.disabled = false;
+        
+        // Expand advanced panel to let user fill custom details
+        document.getElementById('advanced-settings-wrapper').classList.add('expanded');
     }
 }
 
@@ -171,13 +274,13 @@ function saveConfig() {
         pass: elements.smtpPass.value.trim()
     };
     
-    localStorage.setItem('auto_email_smtp', JSON.stringify(state.smtpConfig));
+    localStorage.setItem('resumereach_smtp', JSON.stringify(state.smtpConfig));
     showToast('Configuration Saved!', 'success');
 }
 
 // Load SMTP Config from LocalStorage
 function loadConfig() {
-    const saved = localStorage.getItem('auto_email_smtp');
+    const saved = localStorage.getItem('resumereach_smtp');
     if (saved) {
         try {
             const config = JSON.parse(saved);
@@ -200,7 +303,6 @@ function loadConfig() {
     }
 }
 
-// Upload selected file to Express server backend
 // Process selected file locally and convert to Base64 (Serverless friendly)
 function handleFileUpload(event) {
     const file = event.target.files[0];
@@ -228,7 +330,7 @@ function handleFileUpload(event) {
             // UI state: Success Attached
             elements.pdfFilename.textContent = file.name;
             const kbSize = (file.size / 1024).toFixed(1);
-            elements.pdfFilesize.textContent = `Attached (${kbSize} KB)`;
+            elements.pdfFilesize.textContent = `✓ Ready to send (${kbSize} KB)`;
             elements.attachmentBadge.classList.add('success-attached');
             elements.attachmentIcon.className = '';
             elements.attachmentIcon.setAttribute('data-lucide', 'file-check-2');
@@ -268,8 +370,8 @@ function removeAttachment() {
 // Reset Attachment UI elements back to empty state
 function resetAttachmentUI() {
     state.attachment = null;
-    elements.pdfFilename.textContent = 'No Resume Attached';
-    elements.pdfFilesize.textContent = 'Click Attach to upload';
+    elements.pdfFilename.textContent = '📄 Resume Attachment';
+    elements.pdfFilesize.textContent = 'Upload your resume (PDF, DOCX)';
     elements.attachmentBadge.classList.remove('success-attached');
     elements.attachmentIcon.className = '';
     elements.attachmentIcon.setAttribute('data-lucide', 'paperclip');
@@ -279,8 +381,120 @@ function resetAttachmentUI() {
     lucide.createIcons();
 }
 
-// Parse emails from textarea
+// Process selected CSV File
+function handleCSVUpload(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+        showToast('Please upload a valid CSV file format.', 'error');
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const text = e.target.result;
+            const rows = parseCSVContent(text);
+            
+            if (rows.length === 0) {
+                throw new Error("No records found in CSV file.");
+            }
+            
+            state.csvData = rows;
+            
+            // Hide upload zone and show loaded badge
+            elements.csvDropzone.style.display = 'none';
+            elements.csvLoadedBadge.style.display = 'flex';
+            elements.csvFilename.textContent = file.name;
+            elements.csvRowcount.textContent = `${rows.length} record${rows.length === 1 ? '' : 's'} loaded`;
+            
+            showToast('CSV file loaded successfully!', 'success');
+            updateCSVCountUI();
+        } catch (err) {
+            console.error('CSV Parse Error:', err);
+            showToast(err.message || 'Failed to parse CSV.', 'error');
+            clearCSV();
+        }
+    };
+    reader.readAsText(file);
+}
+
+// Clear currently uploaded CSV
+function clearCSV() {
+    state.csvData = [];
+    elements.csvInput.value = '';
+    
+    elements.csvDropzone.style.display = 'flex';
+    elements.csvLoadedBadge.style.display = 'none';
+    
+    updateCSVCountUI();
+}
+
+// Tokenize CSV to extract emails only
+function parseCSVContent(text) {
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+    if (lines.length < 2) {
+        throw new Error("CSV file must contain a header row and at least one data row.");
+    }
+    
+    // Parse headers
+    const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+    
+    // Find index of required Email column
+    const emailIndex = headers.findIndex(h => h.includes('email') || h.includes('to'));
+    
+    if (emailIndex === -1) {
+        throw new Error("CSV header must contain an 'Email' or 'To' column.");
+    }
+    
+    const parsedEmails = [];
+    for (let i = 1; i < lines.length; i++) {
+        const rowValues = parseCSVLine(lines[i]);
+        if (rowValues.length === 0) continue;
+        
+        // Skip rows that are too short or have empty emails
+        if (rowValues.length <= emailIndex || !rowValues[emailIndex].trim()) continue;
+        
+        parsedEmails.push(rowValues[emailIndex].trim());
+    }
+    
+    return parsedEmails;
+}
+
+// Robust single line CSV parser (handles commas inside quotes)
+function parseCSVLine(line) {
+    let arr = [];
+    let quote = false;
+    let val = '';
+    for (let i = 0; i < line.length; i++) {
+        let c = line[i];
+        if (c === '"') {
+            quote = !quote; // Toggle quote state
+        } else if (c === ',' && !quote) {
+            arr.push(val.replace(/^"|"$/g, '').trim()); // Push value, trim outer quotes
+            val = '';
+        } else {
+            val += c;
+        }
+    }
+    arr.push(val.replace(/^"|"$/g, '').trim());
+    return arr;
+}
+
+// Update the parsed recipient UI counter
+function updateCSVCountUI() {
+    if (state.activeTab === 'csv') {
+        const count = state.csvData.length;
+        elements.parsedCount.textContent = `${count} CSV recipient${count === 1 ? '' : 's'} parsed`;
+        elements.btnStart.disabled = (count === 0 || state.campaignStatus === 'running');
+        elements.btnPreview.disabled = (count === 0 || state.campaignStatus === 'running');
+        updateGmailMeter(count);
+    }
+}
+
+// Parse emails from textarea (Paste tab)
 function parseRecipients() {
+    if (state.activeTab !== 'paste') return;
+    
     const text = elements.recipientsList.value;
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const foundEmails = text.match(emailRegex) || [];
@@ -290,11 +504,41 @@ function parseRecipients() {
     
     elements.parsedCount.textContent = `${state.recipients.length} valid email${state.recipients.length === 1 ? '' : 's'} parsed`;
     
-    // Enable start button if emails exist and campaign not running
+    // Enable start and preview buttons if emails exist and campaign not running
     if (state.recipients.length > 0 && state.campaignStatus !== 'running') {
         elements.btnStart.disabled = false;
-    } else if (state.recipients.length === 0) {
+        elements.btnPreview.disabled = false;
+    } else {
         elements.btnStart.disabled = true;
+        elements.btnPreview.disabled = true;
+    }
+    
+    updateGmailMeter(state.recipients.length);
+}
+
+// Update Gmail safety sending limit widget
+function updateGmailMeter(count) {
+    elements.safetyCount.textContent = `${count} / 100`;
+    
+    const percent = Math.min((count / 100) * 100, 100);
+    elements.safetyBarFill.style.width = `${percent}%`;
+    
+    // Clear classes
+    elements.safetyBarFill.className = 'safety-bar-fill';
+    elements.safetyStatus.className = 'safety-status';
+    
+    if (count <= 50) {
+        elements.safetyBarFill.classList.add('success');
+        elements.safetyStatus.classList.add('success');
+        elements.safetyStatus.textContent = 'Safe Sending Volume';
+    } else if (count <= 100) {
+        elements.safetyBarFill.classList.add('warning');
+        elements.safetyStatus.classList.add('warning');
+        elements.safetyStatus.textContent = 'Moderate Daily Volume';
+    } else {
+        elements.safetyBarFill.classList.add('danger');
+        elements.safetyStatus.classList.add('danger');
+        elements.safetyStatus.textContent = 'Spam Risk: Limit < 100/day';
     }
 }
 
@@ -304,11 +548,14 @@ function updateControlsUI() {
     const isPaused = state.campaignStatus === 'paused';
     const isDone = state.campaignStatus === 'done';
     
-    elements.btnStart.disabled = isRunning || (state.recipients.length === 0);
+    const hasRecipients = state.activeTab === 'paste' ? (state.recipients.length > 0) : (state.csvData.length > 0);
+    
+    elements.btnStart.disabled = isRunning || !hasRecipients;
+    elements.btnPreview.disabled = isRunning || isPaused || !hasRecipients;
     elements.btnPause.disabled = !isRunning;
     elements.btnReset.disabled = isRunning;
     
-    // Disable input settings while campaign is active
+    // Disable inputs while campaign is active
     elements.smtpHost.disabled = isRunning || isPaused || (elements.presetGmail.classList.contains('active'));
     elements.smtpPort.disabled = isRunning || isPaused || (elements.presetGmail.classList.contains('active'));
     elements.smtpSecure.disabled = isRunning || isPaused || (elements.presetGmail.classList.contains('active'));
@@ -323,6 +570,11 @@ function updateControlsUI() {
     elements.recipientsList.disabled = isRunning || isPaused;
     elements.btnAttachTrigger.disabled = isRunning || isPaused;
     elements.btnRemoveAttachment.disabled = isRunning || isPaused;
+    
+    elements.tabPaste.disabled = isRunning || isPaused;
+    elements.tabCsv.disabled = isRunning || isPaused;
+    elements.btnCsvTrigger.disabled = isRunning || isPaused;
+    elements.btnClearCsv.disabled = isRunning || isPaused;
     
     // Set Status Badge
     elements.campaignStatusBadge.className = 'status-indicator-badge';
@@ -341,47 +593,41 @@ function updateControlsUI() {
     }
 }
 
-// Start Campaign Process
-function startCampaign() {
+// Triggered when "Send Email" button is clicked
+function handleSendTrigger() {
     // Validations
     if (!elements.smtpUser.value.trim() || !elements.smtpPass.value.trim()) {
-        showToast('Please enter your SMTP Sender Email and App Password first!', 'error');
+        showToast('Please enter your SMTP credentials first!', 'error');
         return;
     }
     
     if (!elements.emailSubject.value.trim()) {
-        showToast('Please write a Subject line for the email.', 'error');
+        showToast('Please write a Subject line.', 'error');
         return;
     }
     
     if (!elements.emailBody.value.trim()) {
-        showToast('Please write the Email Body content.', 'error');
+        showToast('Please write the Email Body.', 'error');
         return;
     }
     
-    if (state.recipients.length === 0) {
-        showToast('Please paste at least one recipient email address.', 'error');
+    const count = state.activeTab === 'paste' ? state.recipients.length : state.csvData.length;
+    if (count === 0) {
+        showToast('Please provide at least one recipient email.', 'error');
         return;
     }
     
-    // Check if attachment is missing and prompt confirmation
+    // Resume validation check
     if (!state.attachment) {
         const proceedWithoutAttachment = confirm(
-            "There is no attached document.\n\nAre you sure you want to send this email campaign without a resume/attachment?\n\n- Click 'OK' to send without a resume.\n- Click 'Cancel' to stop and attach your document."
+            "📄 There is no attached document (Resume).\n\nAre you sure you want to send this campaign without an attachment?\n\n- Click 'OK' to proceed without attachment.\n- Click 'Cancel' to stop and upload a resume."
         );
         if (!proceedWithoutAttachment) {
             return;
         }
     }
     
-    // Read fresh template values
-    state.email.subject = elements.emailSubject.value.trim();
-    state.email.body = elements.emailBody.value;
-    
-    // Save SMTP configurations implicitly
-    saveConfig();
-    
-    // Check if resuming from paused state
+    // If resuming paused campaign, bypass modal preview
     if (state.campaignStatus === 'paused') {
         state.campaignStatus = 'running';
         updateControlsUI();
@@ -389,30 +635,121 @@ function startCampaign() {
         return;
     }
     
-    // New campaign initialization
+    // Open Final Preview Modal
+    openPreviewModal();
+}
+
+// Triggered when "Preview" button is clicked
+function handlePreviewTrigger() {
+    // Basic validations
+    if (!elements.emailSubject.value.trim()) {
+        showToast('Please write a Subject line.', 'error');
+        return;
+    }
+    
+    if (!elements.emailBody.value.trim()) {
+        showToast('Please write the Email Body.', 'error');
+        return;
+    }
+    
+    const count = state.activeTab === 'paste' ? state.recipients.length : state.csvData.length;
+    if (count === 0) {
+        showToast('Please provide at least one recipient email.', 'error');
+        return;
+    }
+    
+    // Open Preview Modal directly without check
+    openPreviewModal();
+}
+
+// Helper to fill and display the Preview Modal
+function openPreviewModal() {
+    const count = state.activeTab === 'paste' ? state.recipients.length : state.csvData.length;
+    const emailsList = state.activeTab === 'paste' ? state.recipients : state.csvData;
+    
+    elements.modalPreviewSubject.textContent = elements.emailSubject.value.trim();
+    elements.modalPreviewAttachment.textContent = state.attachment ? 
+        `📎 ${state.attachment.filename} (${(state.attachment.size/1024).toFixed(1)} KB)` : 
+        '⚠️ No Attachment (Sending without Resume)';
+    elements.modalPreviewAttachment.style.color = state.attachment ? 'var(--color-success)' : 'var(--color-warning)';
+    
+    elements.modalPreviewCount.textContent = `${count} recipient${count === 1 ? '' : 's'}`;
+    elements.modalPreviewRecipients.textContent = emailsList.join(', ');
+    elements.modalPreviewContent.textContent = elements.emailBody.value;
+    
+    // Render Modal Backdrop
+    elements.previewModal.style.display = 'flex';
+}
+
+// Hide Final Preview Modal
+function hidePreviewModal() {
+    elements.previewModal.style.display = 'none';
+}
+
+// Confirm click inside Preview Modal
+function confirmStartCampaign() {
+    // Validate SMTP configurations before executing (in case started from Preview button directly)
+    if (!elements.smtpUser.value.trim() || !elements.smtpPass.value.trim()) {
+        showToast('Please enter your SMTP credentials first!', 'error');
+        hidePreviewModal();
+        return;
+    }
+    
+    // Resume check (if bypassed or started from Preview button, double check before sending)
+    if (!state.attachment) {
+        const proceedWithoutAttachment = confirm(
+            "📄 There is no attached document (Resume).\n\nAre you sure you want to send this campaign without an attachment?\n\n- Click 'OK' to proceed without attachment.\n- Click 'Cancel' to stop and upload a resume."
+        );
+        if (!proceedWithoutAttachment) {
+            hidePreviewModal();
+            return;
+        }
+    }
+    
+    hidePreviewModal();
+    
+    // Save SMTP configurations
+    saveConfig();
+    
+    // Begin Campaign sending setup
+    startCampaignExecution();
+}
+
+// Start Campaign execution loops
+function startCampaignExecution() {
     state.campaignStatus = 'running';
     state.currentIndex = 0;
     
-    // Setup Campaign Queue
-    state.queue = state.recipients.map(email => ({
-        email: email,
-        status: 'pending',
-        error: null,
-        timestamp: null
-    }));
+    // Build campaign queue (simply map emails)
+    if (state.activeTab === 'paste') {
+        state.queue = state.recipients.map(email => ({
+            email: email,
+            status: 'pending',
+            error: null,
+            timestamp: null
+        }));
+    } else {
+        state.queue = state.csvData.map(email => ({
+            email: email,
+            status: 'pending',
+            error: null,
+            timestamp: null
+        }));
+    }
     
-    // Reset Metrics
+    // Reset metrics
     state.metrics = {
         total: state.queue.length,
         sent: 0,
         failed: 0,
-        pending: state.queue.length
+        pending: state.queue.length,
+        rate: '100%',
+        eta: '--:--'
     };
     
-    // Clear logs list display
     elements.logsList.innerHTML = '';
     
-    // Render initial queue elements into log list
+    // Render initial queue log elements
     state.queue.forEach((item, index) => {
         renderLogItem(index);
     });
@@ -420,7 +757,7 @@ function startCampaign() {
     updateMetricsUI();
     updateControlsUI();
     
-    // Start sending
+    // Start sending loop
     processNextEmail();
 }
 
@@ -432,8 +769,6 @@ function pauseCampaign() {
         state.timerId = null;
     }
     updateControlsUI();
-    
-    // Add paused marker in logs
     addSystemLog('Campaign paused by user.', 'warning');
 }
 
@@ -450,10 +785,11 @@ function resetCampaign() {
         total: 0,
         sent: 0,
         failed: 0,
-        pending: 0
+        pending: 0,
+        rate: '100%',
+        eta: '--:--'
     };
     
-    // Reset UI
     elements.logsList.innerHTML = `
         <div class="log-empty-state">
             <i data-lucide="clipboard-list"></i>
@@ -464,14 +800,18 @@ function resetCampaign() {
     
     updateMetricsUI();
     updateControlsUI();
-    parseRecipients(); // Recount emails
+    
+    if (state.activeTab === 'paste') {
+        parseRecipients();
+    } else {
+        updateCSVCountUI();
+    }
 }
 
-// Process sending one email
+// Process sending single email in the queue
 async function processNextEmail() {
     if (state.campaignStatus !== 'running') return;
     
-    // Check if we reached the end of queue
     if (state.currentIndex >= state.queue.length) {
         state.campaignStatus = 'done';
         updateControlsUI();
@@ -484,6 +824,10 @@ async function processNextEmail() {
     item.status = 'sending';
     item.timestamp = getTimestamp();
     renderLogItem(state.currentIndex);
+    
+    if (elements.logsList.querySelector('.log-empty-state')) {
+        elements.logsList.querySelector('.log-empty-state').remove();
+    }
     
     // Scroll active item into view inside log list
     const logItemEl = document.getElementById(`log-item-${state.currentIndex}`);
@@ -498,8 +842,8 @@ async function processNextEmail() {
             smtpUser: state.smtpConfig.user,
             smtpPass: state.smtpConfig.pass,
             to: item.email,
-            subject: state.email.subject,
-            body: state.email.body,
+            subject: elements.emailSubject.value.trim(),
+            body: elements.emailBody.value,
             attachment: state.attachment ? {
                 filename: state.attachment.filename,
                 content: state.attachment.content,
@@ -522,12 +866,12 @@ async function processNextEmail() {
             state.metrics.sent++;
         } else {
             item.status = 'failed';
-            item.error = data.error || 'Unknown error occurred';
+            item.error = data.error || 'Unknown SMTP error';
             state.metrics.failed++;
         }
     } catch (e) {
         item.status = 'failed';
-        item.error = e.message || 'Network connection failed';
+        item.error = e.message || 'Network dispatch failed';
         state.metrics.failed++;
     }
     
@@ -544,22 +888,47 @@ async function processNextEmail() {
     }
 }
 
-// Update Campaign statistics indicators
+// Update Campaign statistics metrics and progress indicators
 function updateMetricsUI() {
     elements.metricTotal.textContent = state.metrics.total;
     elements.metricSent.textContent = state.metrics.sent;
     elements.metricFailed.textContent = state.metrics.failed;
     elements.metricPending.textContent = state.metrics.pending;
     
+    // Calculate Success Rate
+    const processed = state.metrics.sent + state.metrics.failed;
+    const ratePercent = processed > 0 ? Math.round((state.metrics.sent / processed) * 100) : 100;
+    elements.metricRate.textContent = `${ratePercent}%`;
+    
+    // Calculate ETA
+    updateETA();
+    
     // Progress calculation
     let percentage = 0;
     if (state.metrics.total > 0) {
-        const processed = state.metrics.total - state.metrics.pending;
         percentage = Math.round((processed / state.metrics.total) * 100);
     }
     
     elements.progressBarFill.style.width = `${percentage}%`;
     elements.progressPercentage.textContent = `${percentage}%`;
+}
+
+// Calculate campaign ETA (Estimated Time Left)
+function updateETA() {
+    const totalRemaining = state.metrics.pending;
+    if (totalRemaining <= 0 || state.campaignStatus === 'done' || state.campaignStatus === 'idle') {
+        elements.metricEta.textContent = '--:--';
+        return;
+    }
+    
+    const totalSeconds = totalRemaining * state.delaySeconds;
+    if (totalSeconds >= 60) {
+        const mins = Math.floor(totalSeconds / 60);
+        const secs = totalSeconds % 60;
+        elements.metricEta.textContent = `${mins}m ${secs}s`;
+    } else {
+        elements.metricEta.textContent = `${totalSeconds}s`;
+    }
 }
 
 // Render or Update a single Queue item row in UI Logs list
@@ -569,14 +938,7 @@ function renderLogItem(index) {
     
     let logItemEl = document.getElementById(`log-item-${index}`);
     
-    // Create new if it does not exist
     if (!logItemEl) {
-        // If empty state placeholder is there, remove it
-        const emptyState = elements.logsList.querySelector('.log-empty-state');
-        if (emptyState) {
-            emptyState.remove();
-        }
-        
         logItemEl = document.createElement('div');
         logItemEl.id = `log-item-${index}`;
         elements.logsList.appendChild(logItemEl);
@@ -584,43 +946,44 @@ function renderLogItem(index) {
     
     logItemEl.className = `log-item ${item.status}`;
     
-    // Determine icon based on status
-    let statusIcon = 'clock';
+    let statusSymbol = '•';
     let statusText = 'Pending';
+    let labelArrow = '→';
+    
     if (item.status === 'sending') {
-        statusIcon = 'loader-2';
+        statusSymbol = '<i data-lucide="loader-2" class="spin" style="width:0.85rem; height:0.85rem;"></i>';
         statusText = 'Sending';
     } else if (item.status === 'success') {
-        statusIcon = 'check-circle';
+        statusSymbol = '<span style="color: var(--color-success); font-weight: bold;">✓</span>';
         statusText = 'Sent';
     } else if (item.status === 'failed') {
-        statusIcon = 'x-circle';
+        statusSymbol = '<span style="color: var(--color-failure); font-weight: bold;">✗</span>';
         statusText = 'Failed';
     }
     
     const timeStr = item.timestamp ? item.timestamp : '--:--:--';
-    const isLoaderSpin = item.status === 'sending' ? 'spin' : '';
     
     let htmlContent = `
         <div class="log-meta">
             <span class="log-time">${timeStr}</span>
-            <span class="log-email">${item.email}</span>
+            <span class="log-email" style="display:inline-flex; align-items:center; gap: 0.5rem;">
+                ${statusSymbol} ${statusText} ${labelArrow} ${item.email}
+            </span>
         </div>
         <div class="log-status-badge">
-            <i data-lucide="${statusIcon}" class="${isLoaderSpin}"></i>
-            <span>${statusText}</span>
+            <span class="log-time" style="font-size:0.75rem;">${index + 1}/${state.queue.length}</span>
         </div>
     `;
     
     if (item.status === 'failed' && item.error) {
-        htmlContent += `<div class="log-error-detail">Error: ${item.error}</div>`;
+        htmlContent += `<div class="log-error-detail">Reason: ${item.error}</div>`;
     }
     
     logItemEl.innerHTML = htmlContent;
     lucide.createIcons();
 }
 
-// Add a direct system notification to the logs (e.g. Campaign start, pause)
+// Add a system announcement to the logs
 function addSystemLog(text, type = 'pending') {
     const logItemEl = document.createElement('div');
     logItemEl.className = `log-item ${type}`;

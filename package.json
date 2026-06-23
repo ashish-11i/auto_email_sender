@@ -1,7 +1,7 @@
 {
-  "name": "auto-email-sender",
+  "name": "resumereach",
   "version": "1.0.0",
-  "description": "Auto Email Sender with real-time UI logging and attachment support",
+  "description": "ResumeReach - Personalized Resume Outreach Campaign Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
