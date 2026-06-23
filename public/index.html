@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Email Sender Dashboard</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar - Configuration -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i data-lucide="send" class="logo-icon"></i>
+                    <h2>AutoMail</h2>
+                </div>
+                <p class="tagline">Scalable Cold Outreach</p>
+            </div>
+            
+            <div class="sidebar-content">
+                <div class="config-section">
+                    <h3><i data-lucide="settings"></i> SMTP Settings</h3>
+                    
+                    <div class="presets">
+                        <button type="button" class="btn-preset active" id="preset-gmail">Gmail</button>
+                        <button type="button" class="btn-preset" id="preset-custom">Custom</button>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="smtp-host">SMTP Host</label>
+                        <input type="text" id="smtp-host" value="smtp.gmail.com" placeholder="e.g. smtp.gmail.com">
+                    </div>
+
+                    <div class="form-group-row">
+                        <div class="form-group">
+                            <label for="smtp-port">Port</label>
+                            <input type="number" id="smtp-port" value="465" placeholder="465">
+                        </div>
+                        <div class="form-group">
+                            <label for="smtp-secure">Security</label>
+                            <select id="smtp-secure">
+                                <option value="ssl" selected>SSL (Port 465)</option>
+                                <option value="tls">TLS (Port 587)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="smtp-user">Sender Email</label>
+                        <input type="email" id="smtp-user" placeholder="your-email@gmail.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="smtp-pass">App Password</label>
+                        <div class="password-input-container">
+                            <input type="password" id="smtp-pass" placeholder="xxxx xxxx xxxx xxxx">
+                            <button type="button" class="toggle-password" id="toggle-password">
+                                <i data-lucide="eye"></i>
+                            </button>
+                        </div>
+                        <span class="input-hint">For Gmail, generate an "App Password" in Google Account settings.</span>
+                    </div>
+
+                    <button class="btn btn-save" id="btn-save-config">
+                        <i data-lucide="save"></i> Save Configuration
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard -->
+        <main class="main-content">
+            <header class="dashboard-header">
+                <div>
+                    <h1>Email Campaign Manager</h1>
+                    <p class="subtitle">Automate your outreach queue efficiently and safely</p>
+                </div>
+                <div class="attachment-badge" id="attachment-badge">
+                    <i data-lucide="paperclip" id="attachment-icon"></i>
+                    <div class="attachment-info">
+                        <span class="attachment-name" id="pdf-filename">No Resume Attached</span>
+                        <span class="attachment-size" id="pdf-filesize">Click Attach to upload</span>
+                    </div>
+                    <button type="button" class="btn-attach-action" id="btn-attach-trigger">
+                        <i data-lucide="upload-cloud"></i> Attach
+                    </button>
+                    <button type="button" class="btn-remove-action" id="btn-remove-attachment" style="display: none;">
+                        <i data-lucide="trash-2"></i>
+                    </button>
+                    <input type="file" id="resume-input" accept=".pdf,.doc,.docx" style="display: none;">
+                </div>
+            </header>
+
+            <div class="dashboard-grid">
+                <!-- Section 1: Template Editor -->
+                <div class="card card-editor">
+                    <div class="card-header">
+                        <h2><i data-lucide="edit-3"></i> Email Template</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="email-subject">Subject Line</label>
+                            <input type="text" id="email-subject" value="" placeholder="Enter email subject line">
+                        </div>
+                        <div class="form-group">
+                            <label for="email-body">Email Body</label>
+                            <textarea id="email-body" placeholder="Write your email body here..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Recipients & Controls -->
+                <div class="card card-recipients">
+                    <div class="card-header">
+                        <h2><i data-lucide="users"></i> Recipients & Schedule</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="form-group">
+                            <label for="recipients-list">Recipients List</label>
+                            <textarea id="recipients-list" placeholder="Paste target email addresses here. You can separate them by lines, commas, or spaces. e.g.&#10;hr@company.com&#10;hiring@firm.com, jobs@agency.org"></textarea>
+                            <div class="recipient-stats-row">
+                                <span class="recipient-count" id="parsed-count">0 valid emails parsed</span>
+                            </div>
+                        </div>
+
+                        <div class="form-group delay-slider-group">
+                            <div class="slider-label-row">
+                                <label for="send-delay">Delay Between Emails</label>
+                                <span class="slider-value" id="delay-value">5s</span>
+                            </div>
+                            <input type="range" id="send-delay" min="1" max="30" value="5">
+                            <span class="input-hint">Highly recommended: 5s+ delay to prevent Gmail throttling and spam flagging.</span>
+                        </div>
+
+                        <div class="action-controls">
+                            <button class="btn btn-primary" id="btn-start" disabled>
+                                <i data-lucide="play"></i> Start Campaign
+                            </button>
+                            <button class="btn btn-warning" id="btn-pause" disabled>
+                                <i data-lucide="pause"></i> Pause
+                            </button>
+                            <button class="btn btn-danger" id="btn-reset">
+                                <i data-lucide="rotate-ccw"></i> Reset
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Queue & Metrics -->
+                <div class="card card-progress full-width">
+                    <div class="card-header header-with-actions">
+                        <h2><i data-lucide="bar-chart-2"></i> Campaign Progress & Logs</h2>
+                        <div class="status-indicator-badge idly" id="campaign-status-badge">Idle</div>
+                    </div>
+                    <div class="card-body progress-container">
+                        <!-- Metrics Row -->
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-val" id="metric-total">0</div>
+                                <div class="metric-lbl">Total Queue</div>
+                            </div>
+                            <div class="metric-card success">
+                                <div class="metric-val" id="metric-sent">0</div>
+                                <div class="metric-lbl">Sent Successfully</div>
+                            </div>
+                            <div class="metric-card failure">
+                                <div class="metric-val" id="metric-failed">0</div>
+                                <div class="metric-lbl">Failed</div>
+                            </div>
+                            <div class="metric-card pending">
+                                <div class="metric-val" id="metric-pending">0</div>
+                                <div class="metric-lbl">Remaining</div>
+                            </div>
+                        </div>
+
+                        <!-- Progress Bar -->
+                        <div class="progress-bar-wrapper">
+                            <div class="progress-bar-track">
+                                <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+                            </div>
+                            <div class="progress-bar-percentage" id="progress-percentage">0%</div>
+                        </div>
+
+                        <!-- Logs Log List -->
+                        <div class="logs-wrapper">
+                            <div class="logs-header">
+                                <span>Activity Log</span>
+                                <button class="btn-clear-logs" id="btn-clear-logs">Clear Logs</button>
+                            </div>
+                            <div class="logs-list" id="logs-list">
+                                <div class="log-empty-state">
+                                    <i data-lucide="clipboard-list"></i>
+                                    <p>Logs will appear here once the campaign starts.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Script Entry -->
+    <script src="app.js"></script>
+</body>
+</html>
